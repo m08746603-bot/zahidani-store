@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#111111">
+<title>قياس دقات القلب</title>
+
+<style>
+*{box-sizing:border-box}
+body{
+    margin:0;
+    font-family:Arial,sans-serif;
+    background:#111;
+    color:#fff;
+    text-align:center;
+}
+.container{padding:25px 15px}
+h1{color:#ff4b5c;margin:10px 0}
+.heart{
+    font-size:90px;
+    margin:20px;
+    animation:beat 1s infinite;
+}
+@keyframes beat{
+    0%,100%{transform:scale(1)}
+    20%,60%{transform:scale(1.15)}
+    40%,80%{transform:scale(1)}
+}
+.bpm{
+    font-size:65px;
+    font-weight:bold;
+    color:#ff4b5c;
+}
+.label{font-size:22px;margin-bottom:20px}
+video{
+    width:1px;height:1px;
+    position:absolute;opacity:0;
+}
+canvas{display:none}
+button{
+    border:0;
+    border-radius:15px;
+    padding:16px 30px;
+    font-size:19px;
+    background:#ff3045;
+    color:white;
+    margin:8px;
+}
+button:disabled{background:#555}
+.status{margin-top:18px;font-size:18px;color:#ccc;min-height:30px}
+.info{
+    margin-top:25px;
+    padding:15px;
+    border-radius:15px;
+    background:#222;
+    font-size:15px;
+    line-height:1.8;
+}
+.warning{
+    color:#ffd166;
+    margin-top:15px;
+    font-size:14px;
+}
+</style>
+</head>
+
+<body>
+<div class="container">
+
+<h1>❤️ قياس دقات القلب</h1>
+
+<div class="heart">❤️</div>
+
+<div class="bpm" id="bpm">--</div>
+<div class="label">نبضة / دقيقة</div>
+
+<video id="camera" autoplay playsinline muted></video>
+<canvas id="canvas"></canvas>
+
+<button id="start">▶ ابدأ القياس</button>
+<button id="stop" disabled>⏹ إيقاف</button>
+
+<div class="status" id="status">اضغط «ابدأ القياس»</div>
+
+<div class="info">
+ضع إصبعك على عدسة الكاميرا الخلفية بالكامل، بدون ضغط قوي.<br>
+حاول تثبيت الإصبع والهاتف لمدة 30 إلى 45 ثانية.<br>
+يفضل القياس في مكان بإضاءة ثابتة.
+</div>
+
+<div class="warning">
+⚠️ هذه نتيجة تقديرية للتجربة وليست جهازًا طبيًا.
+</div>
+
+</div>
+
+<script>
+const video = document.getElementById("camera");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d", {willReadFrequently:true});
+
+const startButton = document.getElementById("start");
+const stopButton = document.getElementById("stop");
+const bpmText = document.getElementById("bpm");
+const statusText = document.getElementById("status");
+
+let stream = null;
+let running = false;
+let samples = [];
+let beats = [];
+let lastPeakTime = 0;
+let lastFrameTime = 0;
+
+async function startMeasurement(){
+    try{
+        statusText.textContent = "جاري طلب إذن الكاميرا...";
+
+        if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+            throw new Error("CAMERA_NOT_SUPPORTED");
+        }
+
+        stream = await navigator.mediaDevices.getUserMedia({
+            audio:false,
+            video:{
+                facingMode:{ideal:"environment"},
+                width:{ideal:640},
+                height:{ideal:480},
+                frameRate:{ideal:30,max:30}
+            }
+        });
+
+        video.srcObject = stream;
+        await video.play();
+
+        running = true;
+        samples = [];
+        beats = [];
+        lastPeakTime = 0;
+        lastFrameTime = 0;
+        bpmText.textContent = "--";
+
+        startButton.disabled = true;
+        stopButton.disabled = false;
+        statusText.textContent = "ضع إصبعك على الكاميرا وانتظر 30–45 ثانية.";
+
+        requestAnimationFrame(processCamera);
+
+    }catch(error){
+        console.error(error);
+
+        if(error.name === "NotAllowedError"){
+            statusText.textContent = "تم رفض إذن الكاميرا. اسمح للتطبيق باستخدام الكاميرا.";
+        }else if(error.name === "NotFoundError"){
+            statusText.textContent = "لم يتم العثور على كاميرا.";
+        }else if(error.message === "CAMERA_NOT_SUPPORTED"){
+            statusText.textContent = "هذا المتصفح لا يدعم تشغيل الكاميرا.";
+        }else{
+            statusText.textContent = "تعذر تشغيل الكاميرا. تحقق من الإذن والمتصفح.";
+        }
+
+        stopMeasurement();
+    }
+}
+
+function stopMeasurement(){
+    running = false;
+
+    if(stream){
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+    }
+
+    video.srcObject = null;
+    startButton.disabled = false;
+    stopButton.disabled = true;
+
+    if(bpmText.textContent === "--"){
+        statusText.textContent = "تم إيقاف القياس.";
+    }else{
+        statusText.textContent = "تم إيقاف القياس. النتيجة تقديرية.";
+    }
+}
+
+function processCamera(time){
+    if(!running) return;
+
+    if(video.readyState < 2){
+        requestAnimationFrame(processCamera);
+        return;
+    }
+
+    // نأخذ عينة تقريبًا كل 100ms لتقليل الحمل على الهاتف.
+    if(time - lastFrameTime < 100){
+        requestAnimationFrame(processCamera);
+        return;
+    }
+    lastFrameTime = time;
+
+    canvas.width = 80;
+    canvas.height = 80;
+
+    ctx.drawImage(video,0,0,80,80);
+
+    const data = ctx.getImageData(0,0,80,80).data;
+
+    let red = 0;
+    let green = 0;
+    let blue = 0;
+
+    for(let i=0;i<data.length;i+=4){
+        red += data[i];
+        green += data[i+1];
+        blue += data[i+2];
+    }
+
+    const pixels = data.length / 4;
+    red /= pixels;
+    green /= pixels;
+    blue /= pixels;
+
+    // الإصبع أمام الكاميرا غالبًا يغير شدة اللون الأحمر.
+    const signal = red - (green * 0.5) - (blue * 0.2);
+
+    samples.push({
+        time: performance.now(),
+        value: signal
+    });
+
+    // نحتفظ بآخر 20 ثانية تقريبًا.
+    if(samples.length > 200) samples.shift();
+
+    detectBeat();
+
+    requestAnimationFrame(processCamera);
+}
+
+function detectBeat(){
+    if(samples.length < 35) return;
+
+    const values = samples.map(s => s.value);
+
+    // متوسط متحرك
+    const average =
+        values.reduce((a,b)=>a+b,0) / values.length;
+
+    const variance =
+        values.reduce((sum,v)=>sum + Math.pow(v-average,2),0)
+        / values.length;
+
+    const std = Math.sqrt(variance);
+
+    if(std < 1.2){
+        statusText.textContent =
+            "لم نلتقط إشارة كافية. غطِّ العدسة بإصبعك بالكامل.";
+        return;
+    }
+
+    const current = samples[samples.length-1];
+    const previous = samples[samples.length-2];
+
+    // عتبة ديناميكية
+    const threshold = average + std * 0.7;
+
+    if(current.value > threshold &&
+       previous.value <= threshold){
+
+        const now = performance.now();
+
+        if(lastPeakTime > 0){
+            const interval = now - lastPeakTime;
+
+            if(interval >= 450 && interval <= 1500){
+                const instantBpm = 60000 / interval;
+
+                if(instantBpm >= 40 && instantBpm <= 180){
+                    beats.push(instantBpm);
+
+                    if(beats.length > 8) beats.shift();
+
+                    const sorted = [...beats].sort((a,b)=>a-b);
+
+                    // الوسيط أكثر ثباتًا من المتوسط عند وجود قراءة شاذة.
+                    const median =
+                        sorted.length % 2
+                        ? sorted[Math.floor(sorted.length/2)]
+                        : (sorted[sorted.length/2-1] +
+                           sorted[sorted.length/2]) / 2;
+
+                    bpmText.textContent = Math.round(median);
+                    statusText.textContent =
+                        "جاري القياس... ثبّت إصبعك.";
+                }
+            }
+        }
+
+        lastPeakTime = now;
+    }
+}
+
+startButton.addEventListener("click", startMeasurement);
+stopButton.addEventListener("click", stopMeasurement);
+
+// إيقاف الكاميرا عند مغادرة الصفحة.
+window.addEventListener("pagehide", stopMeasurement);
+</script>
+
+</body>
+</html>
